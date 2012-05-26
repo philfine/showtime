@@ -30,6 +30,8 @@
 #include "misc/string.h"
 #include "prop/prop_nodefilter.h"
 
+#include "settings.h"
+
 #if ENABLE_SPIDERMONKEY
 #include "js/js.h"
 #endif
@@ -279,20 +281,25 @@ plugin_installed_version(const char *srch)
  *
  */
 static htsmsg_t *
-repo_get(char *errbuf, size_t errlen)
+repo_get(char *errbuf, size_t errlen, const char *repo_url)
 {
   char *result;
   static htsmsg_t *repository;
+  static const char *last_repo_url;  
   htsmsg_t *json;
 
   hts_mutex_lock(&plugin_mutex);
   
-  if(repository != NULL) {
+  if((repo_url == NULL && repository != NULL) || 
+		  (last_repo_url != NULL && strcmp(last_repo_url, repo_url) == 0 && repository != NULL)) {
+    last_repo_url = repo_url;
     hts_mutex_unlock(&plugin_mutex);
     return repository;
   }
+#include "assert.h"
+	assert(repo_url != NULL || last_repo_url != NULL);
 
-  if(http_request(plugin_repo_url, NULL, &result, NULL, errbuf, errlen,
+  if(http_request(repo_url, NULL, &result, NULL, errbuf, errlen,
 		  NULL, NULL, 0, NULL, NULL, NULL)) {
   bad:
     hts_mutex_unlock(&plugin_mutex);
@@ -446,19 +453,15 @@ plugin_open_installed(prop_t *page)
   hts_mutex_unlock(&plugin_mutex);
 }
 
-
-/**
- *
- */
 static void
-plugin_open_repo(prop_t *page)
+plugin_open_repo(prop_t *page, const char *url)
 {
   char errbuf[200];
   htsmsg_t *repo, *pm;
   htsmsg_field_t *f;
   prop_t *nodes, *p;
   
-  if((repo = repo_get(errbuf, sizeof(errbuf))) == NULL) {
+  if((repo = repo_get(errbuf, sizeof(errbuf), url)) == NULL) {
     nav_open_errorf(page, _("Unable to request plugin repository: %s"), 
 		    errbuf);
     return;
@@ -957,7 +960,7 @@ plugin_open_repo_item(prop_t *page, const char *id)
   char errbuf[200];
   htsmsg_t  *repo, *pm;
   
-  if((repo = repo_get(errbuf, sizeof(errbuf))) == NULL) {
+  if((repo = repo_get(errbuf, sizeof(errbuf), NULL)) == NULL) {
     nav_open_errorf(page, _("Unable to request plugin repository: %s"), errbuf);
     return;
   }
@@ -1026,7 +1029,53 @@ plugin_open_start(prop_t *page)
   nodes = prop_create(model, "nodes");
 
   add_item(nodes, "Installed", "plugin:installed");
-  add_item(nodes, "Available", "plugin:repo");
+  add_item(nodes, "Available", "plugin:repos");
+}
+
+/**
+ *
+ */
+static void
+plugin_open_repos(prop_t *page)
+{
+  htsmsg_t *m, *o, *n;
+	htsmsg_field_t *f;
+  prop_t *nodes, *model, *metadata;
+  const char *title, *url;
+  char final_url[128] = "plugin:repo_new:";
+
+  model = prop_create(page, "model");
+  prop_set_string(prop_create(model, "type"), "directory");
+  prop_set_string(prop_create(model, "contents"), "items");
+
+  metadata = prop_create(model, "metadata");
+  
+  prop_set_string(prop_create(metadata, "title"),
+		  "Repositories List");
+
+  nodes = prop_create(model, "nodes");
+
+  strcpy(&(final_url[15]), plugin_repo_url);
+  add_item(nodes, "Main Repository", final_url);
+
+  if((m = htsmsg_store_load("pluginsources")) != NULL) {
+
+    n = htsmsg_get_map(m, "nodes");
+    HTSMSG_FOREACH(f, n) {
+      if((o = htsmsg_get_map_by_field(f)) == NULL)
+				continue;
+
+  		if((o = htsmsg_get_map(o, "model")) != NULL)
+			{
+	    	title = htsmsg_get_str(o, "title");
+	    	url = htsmsg_get_str(o, "url");
+
+				strcpy(&(final_url[15]), plugin_repo_url);
+				add_item(nodes, title, final_url);
+			}
+    }
+    htsmsg_destroy(m);
+  }
 }
 
 
@@ -1042,8 +1091,18 @@ plugin_open_url(prop_t *page, const char *url)
     return 0;
   }
 
+  if(!strcmp(url, "plugin:repos")) {
+    plugin_open_repos(page);
+    return 0;
+  }
+
   if(!strcmp(url, "plugin:repo")) {
-    plugin_open_repo(page);
+    plugin_open_repo(page, plugin_repo_url);
+    return 0;
+  }
+
+	if((s = mystrbegins(url, "plugin:repo_new:")) != NULL) {
+    plugin_open_repo(page, s);
     return 0;
   }
 
@@ -1110,3 +1169,148 @@ static backend_t be_plugin = {
 };
 
 BE_REGISTER(plugin);
+
+
+/*
+ * Pluginn settings page 
+ */
+
+static prop_t *plugin_sources;
+
+typedef struct source {
+  prop_sub_t *src_title_sub;
+  prop_sub_t *src_url_sub;
+} source_t;
+
+static void
+source_save(void)
+{
+  htsmsg_t *m = prop_tree_to_htsmsg(prop_create(plugin_sources, "nodes"));
+  htsmsg_store_save(m, "pluginsources");
+  htsmsg_destroy(m);
+}
+
+static void
+set_title(void *opaque, const char *str)
+{
+  source_save();
+}
+
+static void
+set_url(void *opaque, const char *str)
+{
+  source_save();
+}
+
+static prop_sub_t *
+source_add_prop(prop_t *parent, const char *name, const char *value,
+		  source_t *src, prop_callback_string_t *cb)
+{
+  prop_t *p = prop_create(parent, name);
+  prop_set_string(p, value);
+
+  return prop_subscribe(PROP_SUB_NO_INITIAL_UPDATE,
+			PROP_TAG_CALLBACK_STRING, cb, src,
+			PROP_TAG_ROOT, p, 
+			NULL);
+}
+
+static void
+source_destroyed(void *opaque, prop_event_t event, ...)
+{
+  source_t *src = opaque;
+  prop_sub_t *s;
+  va_list ap;
+  va_start(ap, event);
+
+  if(event != PROP_DESTROYED)
+    return;
+
+  (void)va_arg(ap, prop_t *);
+  s = va_arg(ap, prop_sub_t *);
+
+  prop_unsubscribe(src->src_title_sub);
+  prop_unsubscribe(src->src_url_sub);
+
+  free(src);
+
+  source_save();
+  prop_unsubscribe(s);
+}
+static void 
+source_add(const char *title, const char *url)
+{
+  source_t *src = calloc(1, sizeof(source_t));
+  prop_t *p = prop_create_root(NULL);
+  prop_t *parent = prop_create(p, "model");
+ 
+  prop_set_string(prop_create(parent, "type"), "source");
+
+  src->src_title_sub = source_add_prop(parent, "title",    title,   src, set_title);
+  src->src_url_sub   = source_add_prop(parent, "url",      url,     src, set_url);
+
+  prop_subscribe(PROP_SUB_TRACK_DESTROY | PROP_SUB_NO_INITIAL_UPDATE,
+		 PROP_TAG_CALLBACK, source_destroyed, src,
+		 PROP_TAG_ROOT, p,
+		 NULL);
+  if(prop_set_parent(p, prop_create(plugin_sources, "nodes")))
+    abort();
+	
+}
+static void
+source_load(htsmsg_t *m)
+{
+  if((m = htsmsg_get_map(m, "model")) == NULL)
+    return;
+
+  source_add(htsmsg_get_str(m, "title"),
+	       			 htsmsg_get_str(m, "url"));
+}
+
+static void
+sources_callback(void *opaque, prop_event_t event, ...)
+{
+  va_list ap;
+  va_start(ap, event);
+
+  switch(event) {
+  default:
+    break;
+
+  case PROP_REQ_NEW_CHILD:
+    source_add("New source", "http://");
+    break;
+
+  case PROP_REQ_DELETE_VECTOR:
+    prop_vec_destroy_entries(va_arg(ap, prop_vec_t *));
+    break;
+  }
+}
+
+void
+plugin_settings_init(void)
+{
+  htsmsg_field_t *f;
+  htsmsg_t *m, *n, *o;
+
+  plugin_sources = prop_create(settings_add_dir(NULL, _p("Plugin Sources"),
+					   "plugin", NULL, _p("Plugin Sources List")),
+			  "model");
+
+  prop_set_int(prop_create(plugin_sources, "mayadd"), 1);
+
+  prop_subscribe(0,
+		 PROP_TAG_CALLBACK, sources_callback, NULL,
+		 PROP_TAG_ROOT, prop_create(plugin_sources, "nodes"),
+		 NULL);
+
+  if((m = htsmsg_store_load("pluginsources")) != NULL) {
+    n = htsmsg_get_map(m, "nodes");
+    HTSMSG_FOREACH(f, n) {
+      if((o = htsmsg_get_map_by_field(f)) == NULL)
+	continue;
+      source_load(o);
+    }
+    htsmsg_destroy(m);
+  }
+}

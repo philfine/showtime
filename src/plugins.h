@@ -25,4 +25,11 @@ void plugin_open_file(prop_t *page, const char *url);
 
 void plugins_reload_dev_plugin(void);
 
+struct plugin_settings {
+	struct source *sources;
+	int sources_size;
+};
+
+void plugin_settings_init(void);
+
 #endif // PLUGINS_H__

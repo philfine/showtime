@@ -427,6 +427,9 @@ main(int argc, char **argv)
   /* Video settings */
   video_settings_init();
 
+  /* Plugins settings */
+  plugin_settings_init();
+
   if(jsfile)
     js_load(jsfile);
 
