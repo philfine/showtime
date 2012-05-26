@@ -31,12 +31,15 @@
 #include "prop/prop_nodefilter.h"
 
 #include "settings.h"
+#include "assert.h"
 
 #if ENABLE_SPIDERMONKEY
 #include "js/js.h"
 #endif
 
 const char *plugin_repo_url = "http://showtime.lonelycoder.com/plugins/plugins-v1.json";
+char last_repo_url[256];
+
 extern char *showtime_persistent_path;
 static htsmsg_t *loaded_plugins;
 static hts_mutex_t plugin_mutex;
@@ -285,26 +288,25 @@ repo_get(char *errbuf, size_t errlen, const char *repo_url)
 {
   char *result;
   static htsmsg_t *repository;
-  static const char *last_repo_url;  
   htsmsg_t *json;
 
   hts_mutex_lock(&plugin_mutex);
   
   if((repo_url == NULL && repository != NULL) || 
-		  (last_repo_url != NULL && strcmp(last_repo_url, repo_url) == 0 && repository != NULL)) {
-    last_repo_url = repo_url;
+      (last_repo_url != NULL && strcmp(last_repo_url, repo_url) == 0 && repository != NULL)) {
     hts_mutex_unlock(&plugin_mutex);
     return repository;
   }
-#include "assert.h"
-	assert(repo_url != NULL || last_repo_url != NULL);
+  assert(repo_url != NULL || last_repo_url != NULL);
 
   if(http_request(repo_url, NULL, &result, NULL, errbuf, errlen,
 		  NULL, NULL, 0, NULL, NULL, NULL)) {
+
   bad:
     hts_mutex_unlock(&plugin_mutex);
     return NULL;
   }
+  strcpy(last_repo_url, repo_url);
   
   json = htsmsg_json_deserialize(result);
   free(result);
@@ -376,7 +378,7 @@ plugin_prop_from_htsmsg(htsmsg_t *pm)
     prop_set_string(prop_create(metadata, "icon"), url);
   } else {
     if(icon != NULL) {
-      char *iconurl = url_resolve_relative_from_base(plugin_repo_url, icon);
+      char *iconurl = url_resolve_relative_from_base(last_repo_url, icon);
       prop_set_string(prop_create(metadata, "icon"), iconurl);
       free(iconurl);
     }
@@ -975,13 +977,13 @@ plugin_open_repo_item(prop_t *page, const char *id)
     nav_open_errorf(page, _("Plugin ID %s have no download URL"), id);
     return;
   }
-  char *package = url_resolve_relative_from_base(plugin_repo_url, dlurl0);
+  char *package = url_resolve_relative_from_base(last_repo_url, dlurl0);
 
   const char *icon = htsmsg_get_str(pm, "icon");
   char *iconurl = NULL;
 
   if(icon != NULL)
-    iconurl = url_resolve_relative_from_base(plugin_repo_url, icon);
+    iconurl = url_resolve_relative_from_base(last_repo_url, icon);
   
   plugin_open_in_page(page, id, pm, package, iconurl);
   free(package);
@@ -1055,7 +1057,7 @@ plugin_open_repos(prop_t *page)
 
   nodes = prop_create(model, "nodes");
 
-  strcpy(&(final_url[15]), plugin_repo_url);
+  strcpy(&(final_url[16]), plugin_repo_url);
   add_item(nodes, "Main Repository", final_url);
 
   if((m = htsmsg_store_load("pluginsources")) != NULL) {
@@ -1063,16 +1065,16 @@ plugin_open_repos(prop_t *page)
     n = htsmsg_get_map(m, "nodes");
     HTSMSG_FOREACH(f, n) {
       if((o = htsmsg_get_map_by_field(f)) == NULL)
-				continue;
+	continue;
 
-  		if((o = htsmsg_get_map(o, "model")) != NULL)
-			{
-	    	title = htsmsg_get_str(o, "title");
-	    	url = htsmsg_get_str(o, "url");
+      if((o = htsmsg_get_map(o, "model")) != NULL)
+      {
+	title = htsmsg_get_str(o, "title");
+	url = htsmsg_get_str(o, "url");
 
-				strcpy(&(final_url[15]), plugin_repo_url);
-				add_item(nodes, title, final_url);
-			}
+	strcpy(&(final_url[16]), url);
+	add_item(nodes, title, final_url);
+      }
     }
     htsmsg_destroy(m);
   }
