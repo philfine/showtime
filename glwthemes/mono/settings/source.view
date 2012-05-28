@@ -125,7 +125,6 @@ widget(container_x, {
 			     [1.0, 1.0, 1.0],
 			     "ok",   [0.2, 1.0, 0.2],
 			     "auth", [1.0, 0.2, 0.2],
-			     "nohandler", [1.0, 0.2, 0.2],
 			     "fail", [1.0, 0.2, 0.2],
 			     "scanning", [0.7, 0.7, 0.2]);
 
@@ -133,7 +132,6 @@ widget(container_x, {
 			      void,
 			      "ok",   "theme://svg/Check.svg",
 			      "auth", "theme://svg/Lock.svg",
-			      "nohandler", "theme://svg/Alert.svg",
 			      "fail", "theme://svg/Alert.svg",
 			      "scanning", "theme://svg/Scan.svg");
 	  .shadow = true;

@@ -1182,6 +1182,9 @@ static prop_t *plugin_sources;
 typedef struct source {
   prop_sub_t *src_title_sub;
   prop_sub_t *src_url_sub;
+
+  prop_t *src_status;
+  prop_t *src_statustxt;
 } source_t;
 
 static void
@@ -1193,15 +1196,34 @@ source_save(void)
 }
 
 static void
+update_status_for_source(source_t *src, const char *url) 
+{
+  char errbuf[200];
+  htsmsg_t *repo;
+
+  prop_set_string(src->src_status, "scanning");
+
+  if((repo = repo_get(errbuf, sizeof(errbuf), url)) == NULL) {
+    prop_set_string(src->src_status, "fail");
+    prop_set_string(src->src_statustxt, "Failed to access source repository.");
+    return;
+  }
+  prop_set_string(src->src_status, "ok");
+  prop_set_string(src->src_statustxt, "");
+}
+
+static void
 set_title(void *opaque, const char *str)
 {
   source_save();
 }
 
+
 static void
 set_url(void *opaque, const char *str)
 {
   source_save();
+  update_status_for_source((source_t *) opaque, str);
 }
 
 static prop_sub_t *
@@ -1209,12 +1231,14 @@ source_add_prop(prop_t *parent, const char *name, const char *value,
 		  source_t *src, prop_callback_string_t *cb)
 {
   prop_t *p = prop_create(parent, name);
-  prop_set_string(p, value);
 
-  return prop_subscribe(PROP_SUB_NO_INITIAL_UPDATE,
+  prop_sub_t *ret = prop_subscribe(PROP_SUB_NO_INITIAL_UPDATE,
 			PROP_TAG_CALLBACK_STRING, cb, src,
 			PROP_TAG_ROOT, p, 
 			NULL);
+  prop_set_string(p, value);
+
+  return ret;
 }
 
 static void
@@ -1251,10 +1275,15 @@ source_add(const char *title, const char *url)
   src->src_title_sub = source_add_prop(parent, "title",    title,   src, set_title);
   src->src_url_sub   = source_add_prop(parent, "url",      url,     src, set_url);
 
+
+  src->src_status = prop_create(parent, "status");
+  src->src_statustxt   = prop_create(parent, "statustxt");
+
   prop_subscribe(PROP_SUB_TRACK_DESTROY | PROP_SUB_NO_INITIAL_UPDATE,
 		 PROP_TAG_CALLBACK, source_destroyed, src,
 		 PROP_TAG_ROOT, p,
 		 NULL);
+
   if(prop_set_parent(p, prop_create(plugin_sources, "nodes")))
     abort();
 	
